@@ -5,9 +5,23 @@ from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import get_db_connection, init_db
+from werkzeug.utils import secure_filename
+from processing import remove_duplicates
+
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
+
+PROCESSING_FUNCTIONS = {
+    'remove_duplicates': remove_duplicates,
+}
+
+import os
+
+UPLOAD_FOLDER = 'uploads'
+RESULT_FOLDER = 'results'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(RESULT_FOLDER, exist_ok=True)
 
 init_db()
 
@@ -94,6 +108,60 @@ def logout():
     logout_user()
     flash('You have been logged out.')
     return redirect(url_for('login'))
+
+import pandas as pd
+
+ALLOWED_EXTENSIONS = {'csv'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/upload', methods=['GET', 'POST'])
+@login_required
+def upload_file():
+    if request.method == 'POST':
+        file = request.files['file']
+        processing_type = request.form.get('processing_type')
+
+        if not file or file.filename == '':
+            flash('Please select a file to upload.')
+            return redirect(url_for('upload'))
+
+        if not allowed_file(file.filename):
+            flash('Invalid file type. Only CSV files are allowed.')
+            return redirect(url_for('upload'))
+
+        filename = secure_filename(file.filename)
+        upload_path = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(upload_path)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO tasks (user_id, original_filename, processing_type, status) VALUES (?, ?, ?, ?)', 
+                     (current_user.id, filename, processing_type, 'pending'))
+        task_id = cursor.lastrowid        
+        conn.commit()
+
+        result_filename = f"result_{filename}"
+        result_path = os.path.join(RESULT_FOLDER, result_filename)
+
+        try:
+            processing_function = PROCESSING_FUNCTIONS.get(processing_type)
+            processing_function(upload_path, result_path)
+
+            cursor.execute('UPDATE tasks SET status = ?, result_filename = ? WHERE id = ?',
+                         ('done', result_filename, task_id))
+            conn.commit()
+            flash('File processed successfully.')
+        except Exception as e:
+            cursor.execute('UPDATE tasks SET status = ? WHERE id = ?', ('error', task_id))
+            conn.commit()
+            flash(f'Error processing file: {str(e)}')
+                
+        conn.close()
+        return redirect(url_for('upload_file'))
+
+    return render_template('upload.html')
 
 if __name__ == '__main__':
     app.run(debug=True)
