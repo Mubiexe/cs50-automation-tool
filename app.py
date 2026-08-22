@@ -1,8 +1,11 @@
 # Portions of this code were developed with the assistance of Claude (Anthropic)
 # and GitHub Copilot/VS Code autocompletion suggestions.
 
+from gettext import find
+
 from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import get_db_connection, init_db
 from werkzeug.utils import secure_filename
@@ -11,6 +14,14 @@ from processing import normalize_text_case, remove_duplicates, remove_empty_rows
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
+
+app.config['MAIL_SERVER'] = 'sandbox.smtp.mailtrap.io'
+app.config['MAIL_PORT'] = 2525
+app.config['MAIL_USERNAME'] = '207e51da7d54dd'
+app.config['MAIL_PASSWORD'] = '5dcea02d1c05e7'
+app.config['MAIL_USE_TLS'] = True
+
+mail = Mail(app)
 
 PROCESSING_FUNCTIONS = {
     'remove_duplicates': remove_duplicates,
@@ -155,6 +166,11 @@ def upload_file():
                          ('done', result_filename, task_id))
             conn.commit()
             flash('File processed successfully.')
+
+            recipient_email = request.form.get('email')
+            if recipient_email:
+                send_result_email(recipient_email, result_filename, result_path)
+                flash(f'Result sent to {recipient_email}.')
         except Exception as e:
             cursor.execute('UPDATE tasks SET status = ? WHERE id = ?', ('error', task_id))
             conn.commit()
@@ -190,6 +206,19 @@ def history():
     tasks = conn.execute('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC', (current_user.id,)).fetchall()
     conn.close()
     return render_template('history.html', tasks=tasks)
+
+def send_result_email(recipient, task_filename, attachment_path):
+    msg = Message(
+        subject="Your file has been processed",
+        sender="noreply@automationtool.com",
+        recipients=[recipient],
+    )
+    msg.body = f"Your file '{task_filename}' has been processed. Please find the result attached."
+
+    with app.open_resource(attachment_path) as fp:
+        msg.attach(task_filename, "text/csv", fp.read())
+
+    mail.send(msg)
 
 if __name__ == '__main__':
     app.run(debug=True)
