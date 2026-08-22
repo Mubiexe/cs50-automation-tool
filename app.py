@@ -6,7 +6,7 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import get_db_connection, init_db
 from werkzeug.utils import secure_filename
-from processing import remove_duplicates
+from processing import normalize_text_case, remove_duplicates, remove_empty_rows
 
 
 app = Flask(__name__)
@@ -14,6 +14,8 @@ app.secret_key = 'your_secret_key'
 
 PROCESSING_FUNCTIONS = {
     'remove_duplicates': remove_duplicates,
+    'remove_empty_rows': remove_empty_rows,
+    'normalize_text_case': normalize_text_case
 }
 
 import os
