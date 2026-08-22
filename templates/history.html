@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>History</title>
+        <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    </head>
+
+    <body>
+        <h1>Task history</h1>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Processing</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for task in tasks %}
+                <tr>
+                    <td>{{ task.original_filename }}</td>
+                    <td>{{ task.processing_type }}</td>
+                    <td>{{ task.status }}</td>
+                    <td>{{ task.created_at }}</td>
+                    <td>
+                        {% if task.status == 'done' %}
+                        <a href="{{ url_for('download_file', task_id=task.id) }}">Download</a>
+                         {% elif task.status == "error" %}
+                            Failed
+                        {% else %}
+                            Processing...
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <a href="{{ url_for('index') }}">Back to Home</a>
+</html>

@@ -1,7 +1,7 @@
 # Portions of this code were developed with the assistance of Claude (Anthropic)
 # and GitHub Copilot/VS Code autocompletion suggestions.
 
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import get_db_connection, init_db
@@ -162,6 +162,32 @@ def upload_file():
         return redirect(url_for('upload_file'))
 
     return render_template('upload.html')
+
+@app.route('/download/<int:task_id>')
+@login_required
+def download_file(task_id):
+    conn = get_db_connection()
+    task = conn.execute('SELECT * FROM tasks WHERE id = ? AND user_id = ?', (task_id, current_user.id)).fetchone()
+    conn.close()
+
+    if task is None:
+        flash('Task not found.')
+        return redirect(url_for('upload_file'))
+
+    if task['status'] != 'done' or not task['result_filename']:
+        flash('File is not ready for download.')
+        return redirect(url_for('upload_file'))
+
+    result_filename = task['result_filename']
+    return send_from_directory(RESULT_FOLDER, result_filename, as_attachment=True)
+
+@app.route('/history')
+@login_required
+def history():
+    conn = get_db_connection()
+    tasks = conn.execute('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC', (current_user.id,)).fetchall()
+    conn.close()
+    return render_template('history.html', tasks=tasks)
 
 if __name__ == '__main__':
     app.run(debug=True)
