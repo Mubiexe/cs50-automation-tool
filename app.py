@@ -2,7 +2,7 @@
 # and GitHub Copilot/VS Code autocompletion suggestions.
 
 from gettext import find
-
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_mail import Mail, Message
@@ -11,14 +11,17 @@ from database import get_db_connection, init_db
 from werkzeug.utils import secure_filename
 from processing import normalize_text_case, remove_duplicates, remove_empty_rows
 
+import os
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'
+app.secret_key = os.getenv('SECRET_KEY')
 
-app.config['MAIL_SERVER'] = 'sandbox.smtp.mailtrap.io'
-app.config['MAIL_PORT'] = 2525
-app.config['MAIL_USERNAME'] = '207e51da7d54dd'
-app.config['MAIL_PASSWORD'] = '5dcea02d1c05e7'
+app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER')
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT'))
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
 app.config['MAIL_USE_TLS'] = True
 
 mail = Mail(app)
@@ -29,7 +32,6 @@ PROCESSING_FUNCTIONS = {
     'normalize_text_case': normalize_text_case
 }
 
-import os
 
 UPLOAD_FOLDER = 'uploads'
 RESULT_FOLDER = 'results'
