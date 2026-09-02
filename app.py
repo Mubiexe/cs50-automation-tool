@@ -1,9 +1,12 @@
 # Portions of this code were developed with the assistance of Claude (Anthropic)
 # and GitHub Copilot/VS Code autocompletion suggestions.
+# The PostgreSQL migration and the JSON API layer (/api/tasks) were added
+# afterwards, also with Claude's help, as a deliberate extension beyond the
+# original CS50 submission to practice REST APIs and a production-style
+# database setup.
 
-from gettext import find
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory, jsonify
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -53,7 +56,10 @@ class User(UserMixin):
 @login_manager.user_loader
 def load_user(user_id):
     conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM users WHERE id = %s', (user_id,))
+    user = cur.fetchone()
+    cur.close()
     conn.close()
     if user:
         return User(id=user['id'], email=user['email'], password_hash=user['password_hash'])
@@ -75,21 +81,25 @@ def register():
             return redirect(url_for('register'))
 
         conn = get_db_connection()
-        existing_user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+        existing_user = cur.fetchone()
 
         if existing_user:
             flash('Email already registered.')
+            cur.close()
             conn.close()
             return redirect(url_for('register'))
 
         password_hash = generate_password_hash(password)
-        conn.execute('INSERT INTO users (email, password_hash) VALUES (?, ?)', (email, password_hash))
+        cur.execute('INSERT INTO users (email, password_hash) VALUES (%s, %s)', (email, password_hash))
         conn.commit()
+        cur.close()
         conn.close()
 
         flash('Registration successful. Please log in.')
         return redirect(url_for('login'))
-    
+
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -101,9 +111,12 @@ def login():
         if not email or not password:
             flash('Email and password are required.')
             return redirect(url_for('login'))
-        
+
         conn = get_db_connection()
-        user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+        user = cur.fetchone()
+        cur.close()
         conn.close()
 
         if user is None or not check_password_hash(user['password_hash'], password):
@@ -114,7 +127,7 @@ def login():
         login_user(user_obj)
 
         return redirect(url_for('index'))
-    
+
     return render_template('login.html')
 
 @app.route('/logout')
@@ -152,9 +165,10 @@ def upload_file():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('INSERT INTO tasks (user_id, original_filename, processing_type, status) VALUES (?, ?, ?, ?)', 
-                     (current_user.id, filename, processing_type, 'pending'))
-        task_id = cursor.lastrowid        
+        cursor.execute(
+            'INSERT INTO tasks (user_id, original_filename, processing_type, status) VALUES (%s, %s, %s, %s) RETURNING id',
+            (current_user.id, filename, processing_type, 'pending'))
+        task_id = cursor.fetchone()['id']
         conn.commit()
 
         result_filename = f"result_{filename}"
@@ -164,7 +178,7 @@ def upload_file():
             processing_function = PROCESSING_FUNCTIONS.get(processing_type)
             processing_function(upload_path, result_path)
 
-            cursor.execute('UPDATE tasks SET status = ?, result_filename = ? WHERE id = ?',
+            cursor.execute('UPDATE tasks SET status = %s, result_filename = %s WHERE id = %s',
                          ('done', result_filename, task_id))
             conn.commit()
             flash('File processed successfully.')
@@ -174,10 +188,11 @@ def upload_file():
                 send_result_email(recipient_email, result_filename, result_path)
                 flash(f'Result sent to {recipient_email}.')
         except Exception as e:
-            cursor.execute('UPDATE tasks SET status = ? WHERE id = ?', ('error', task_id))
+            cursor.execute('UPDATE tasks SET status = %s WHERE id = %s', ('error', task_id))
             conn.commit()
             flash(f'Error processing file: {str(e)}')
-                
+
+        cursor.close()
         conn.close()
         return redirect(url_for('upload_file'))
 
@@ -187,7 +202,10 @@ def upload_file():
 @login_required
 def download_file(task_id):
     conn = get_db_connection()
-    task = conn.execute('SELECT * FROM tasks WHERE id = ? AND user_id = ?', (task_id, current_user.id)).fetchone()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM tasks WHERE id = %s AND user_id = %s', (task_id, current_user.id))
+    task = cur.fetchone()
+    cur.close()
     conn.close()
 
     if task is None:
@@ -205,9 +223,54 @@ def download_file(task_id):
 @login_required
 def history():
     conn = get_db_connection()
-    tasks = conn.execute('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC', (current_user.id,)).fetchall()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM tasks WHERE user_id = %s ORDER BY created_at DESC', (current_user.id,))
+    tasks = cur.fetchall()
+    cur.close()
     conn.close()
     return render_template('history.html', tasks=tasks)
+
+
+# --- API REST JSON --------------------------------------------------------
+# Deux routes qui exposent l'historique des taches en JSON plutot qu'en
+# HTML, en reprenant le pattern du tuto "Implementing a RESTful Web API
+# with Python & Flask". L'authentification reste celle deja en place
+# (session Flask-Login) : il faut etre connecte pour interroger l'API,
+# exactement comme pour /history.
+
+@app.route('/api/tasks', methods=['GET'])
+@login_required
+def api_tasks():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM tasks WHERE user_id = %s ORDER BY created_at DESC', (current_user.id,))
+    tasks = cur.fetchall()
+    cur.close()
+    conn.close()
+    return jsonify([dict(t) for t in tasks]), 200
+
+
+@app.route('/api/tasks/<int:task_id>', methods=['GET'])
+@login_required
+def api_task(task_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM tasks WHERE id = %s AND user_id = %s', (task_id, current_user.id))
+    task = cur.fetchone()
+    cur.close()
+    conn.close()
+    if task is None:
+        return jsonify({'error': 'task not found'}), 404
+    return jsonify(dict(task)), 200
+
+
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'resource not found'}), 404
+    flash('Page not found.')
+    return redirect(url_for('index'))
+
 
 def send_result_email(recipient, task_filename, attachment_path):
     msg = Message(
